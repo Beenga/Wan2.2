@@ -53,6 +53,38 @@ def flash_attention(
     assert dtype in half_dtypes
     assert q.device.type == 'cuda' and q.size(-1) <= 256
 
+    # ⚠ FALL BACK HERE, NOT AT EACH CALL SITE.
+    #
+    # Upstream asserts FLASH_ATTN_2_AVAILABLE further down and dies if flash-attn
+    # is absent. Only attention() guards against that; there are TWELVE direct
+    # flash_attention() call sites across wan/ -- model.py self- and cross-attn,
+    # s2v/motioner.py x3, animate/*, distributed/ulysses.py -- and S2V reaches
+    # several of them. Patching call sites one at a time means rediscovering this
+    # once per site, each costing a build, a deploy and a 45GB model load.
+    #
+    # So the fallback lives in the function everything already calls. Torch 2.6's
+    # SDPA dispatches to its own fused/memory-efficient kernels, so this changes
+    # which backend runs, not whether attention is fused.
+    #
+    # ⚠ Padding semantics differ: flash_attn_varlen_func packs sequences and
+    # honours q_lens/k_lens exactly, whereas this path attends over the padded
+    # region. That is upstream's own documented trade-off -- attention() warns
+    # about it in the identical situation -- and it is why the warning is kept.
+    if not (FLASH_ATTN_2_AVAILABLE or FLASH_ATTN_3_AVAILABLE):
+        if q_lens is not None or k_lens is not None:
+            warnings.warn(
+                'Padding mask is disabled when using scaled_dot_product_attention. '
+                'It can have a significant impact on performance.')
+        out_dtype_ = q.dtype
+        qs = q.transpose(1, 2).to(dtype)
+        ks = k.transpose(1, 2).to(dtype)
+        vs = v.transpose(1, 2).to(dtype)
+        if q_scale is not None:
+            qs = qs * q_scale
+        out = torch.nn.functional.scaled_dot_product_attention(
+            qs, ks, vs, attn_mask=None, is_causal=causal, dropout_p=dropout_p)
+        return out.transpose(1, 2).contiguous().type(out_dtype_)
+
     # params
     b, lq, lk, out_dtype = q.size(0), q.size(1), k.size(1), q.dtype
 
