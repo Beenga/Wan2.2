@@ -23,6 +23,7 @@ from ..model import (
     WanLayerNorm,
     WanModel,
     WanSelfAttention,
+    attention,
     flash_attention,
     rope_params,
     sinusoidal_embedding_1d,
@@ -168,7 +169,14 @@ class WanS2VSelfAttention(WanSelfAttention):
 
         q, k, v = qkv_fn(x)
 
-        x = flash_attention(
+        # ⚠ attention(), not flash_attention(). The low-level flash_attention()
+        # asserts FLASH_ATTN_2_AVAILABLE and has no fallback, so S2V hard-required
+        # flash-attn while the rest of the codebase degrades gracefully. attention()
+        # is upstream's own wrapper: it calls flash_attention when flash-attn is
+        # installed and torch scaled_dot_product_attention when it is not. Torch
+        # 2.6's SDPA dispatches to its own fused/mem-efficient kernels, so this is a
+        # dependency change rather than a naive-attention fallback.
+        x = attention(
             q=rope_apply(q, grid_sizes, freqs),
             k=rope_apply(k, grid_sizes, freqs),
             v=v,
