@@ -23,11 +23,15 @@ from ..model import (
     WanLayerNorm,
     WanModel,
     WanSelfAttention,
-    attention,
     flash_attention,
     rope_params,
     sinusoidal_embedding_1d,
 )
+# ⚠ `attention` comes from ..attention, NOT ..model. wan/modules/model.py does
+# `from .attention import flash_attention` only -- it never re-exports the
+# fallback-capable wrapper, so importing it from ..model raises ImportError at
+# module load.
+from ..attention import attention
 from .audio_utils import AudioInjector_WAN, CausalAudioEncoder
 from .motioner import FramePackMotioner, MotionerTransformers
 from .s2v_utils import rope_precompute
